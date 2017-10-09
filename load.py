@@ -50,65 +50,77 @@ def test_connection(fcrepo):
         logger.warn("Unable to connect.")
         sys.exit(1)
 
+def create_and_update_item(fcrepo, item, args, extra=None):
+    logger.info('Creating item')
+    item.recursive_create(fcrepo)
+    logger.info('Creating ordering proxies')
+    item.create_ordering(fcrepo)
+    if not args.noannotations:
+        logger.info('Creating annotations')
+        item.create_annotations(fcrepo)
+
+    if extra:
+        logger.info('Adding additional triples')
+        if re.search(r'\.(ttl|n3|nt)$', extra):
+            rdf_format = 'n3'
+        elif re.search(r'\.(rdf|xml)$', extra):
+            rdf_format = 'xml'
+        item.add_extra_properties(extra, rdf_format)
+
+    logger.info('Updating item and components')
+    item.recursive_update(fcrepo)
+    if not args.noannotations:
+        logger.info('Updating annotations')
+        item.update_annotations(fcrepo)
+
 def load_item(fcrepo, item, args, extra=None):
     # read data for item
     logger.info('Reading item data')
     item.read_data()
 
-    # open transaction
-    logger.info('Opening transaction')
-    fcrepo.open_transaction()
+    if args.notransactions is not None:
+        try:
+            create_and_update_item(fcrepo, item, args, extra)
+        except (pcdm.RESTAPIException, FileNotFoundError) as e:
+            logger.error("Item creation failed: {0}".format(e))
+        except KeyboardInterrupt as e:
+            logger.error("Load interrupted")
+            sys.exit(2)
 
-    # create item and its components
-    try:
-        keep_alive = pcdm.TransactionKeepAlive(fcrepo, 90)
-        keep_alive.start()
+    else:
 
-        logger.info('Creating item')
-        item.recursive_create(fcrepo)
-        logger.info('Creating ordering proxies')
-        item.create_ordering(fcrepo)
-        if not args.noannotations:
-            logger.info('Creating annotations')
-            item.create_annotations(fcrepo)
+        # open transaction
+        logger.info('Opening transaction')
+        fcrepo.open_transaction()
 
-        if extra:
-            logger.info('Adding additional triples')
-            if re.search(r'\.(ttl|n3|nt)$', extra):
-                rdf_format = 'n3'
-            elif re.search(r'\.(rdf|xml)$', extra):
-                rdf_format = 'xml'
-            item.add_extra_properties(extra, rdf_format)
+        # create item and its components
+        try:
+            keep_alive = pcdm.TransactionKeepAlive(fcrepo, 90)
+            keep_alive.start()
+            create_and_update_item(fcrepo, item, args, extra)
+            keep_alive.stop()
 
-        logger.info('Updating item and components')
-        item.recursive_update(fcrepo)
-        if not args.noannotations:
-            logger.info('Updating annotations')
-            item.update_annotations(fcrepo)
+            # commit transaction
+            logger.info('Committing transaction')
+            fcrepo.commit_transaction()
+            logger.info('Performing post-creation actions')
+            item.post_creation_hook()
+            return True
 
-        keep_alive.stop()
+        except (pcdm.RESTAPIException, FileNotFoundError) as e:
+            # if anything fails during item creation or commiting the transaction
+            # attempt to rollback the current transaction
+            # failures here will be caught by the main loop's exception handler
+            # and should trigger a system exit
+            logger.error("Item creation failed: {0}".format(e))
+            fcrepo.rollback_transaction()
+            logger.warn('Transaction rolled back. Continuing load.')
 
-        # commit transaction
-        logger.info('Committing transaction')
-        fcrepo.commit_transaction()
-        logger.info('Performing post-creation actions')
-        item.post_creation_hook()
-        return True
-
-    except (pcdm.RESTAPIException, FileNotFoundError) as e:
-        # if anything fails during item creation or commiting the transaction
-        # attempt to rollback the current transaction
-        # failures here will be caught by the main loop's exception handler
-        # and should trigger a system exit
-        logger.error("Item creation failed: {0}".format(e))
-        fcrepo.rollback_transaction()
-        logger.warn('Transaction rolled back. Continuing load.')
-
-    except KeyboardInterrupt as e:
-        # set the stop flag on the keep-alive ping
-        keep_alive.stop()
-        logger.error("Load interrupted")
-        sys.exit(2)
+        except KeyboardInterrupt as e:
+            # set the stop flag on the keep-alive ping
+            keep_alive.stop()
+            logger.error("Load interrupted")
+            sys.exit(2)
 
 # custom argument type for percentage loads
 def percentage(n):
@@ -198,10 +210,15 @@ def main():
                         help='file listing items to ignore',
                         action='store'
                         )
-    
+
     parser.add_argument('--wait', '-w',
                         help='wait n seconds between items',
                         action='store'
+                        )
+
+    parser.add_argument('--notransactions',
+                        help='run the load without using transactions',
+                        action='store_true'
                         )
 
     args = parser.parse_args()
@@ -363,7 +380,7 @@ def main():
                 completed.writerow(row)
             else:
                 skipped.writerow(row)
-                
+
             if args.wait:
                 logger.info("Pausing {0} seconds".format(args.wait))
                 sleep(int(args.wait))
