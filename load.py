@@ -78,9 +78,12 @@ def load_item(fcrepo, item, args, extra=None):
     logger.info('Reading item data')
     item.read_data()
 
-    if args.notransactions is not None:
+    if args.notransactions:
         try:
             create_and_update_item(fcrepo, item, args, extra)
+            logger.info('Performing post-creation actions')
+            item.post_creation_hook()
+            return True
         except (pcdm.RESTAPIException, FileNotFoundError) as e:
             logger.error("Item creation failed: {0}".format(e))
         except KeyboardInterrupt as e:
