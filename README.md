@@ -1,3 +1,8 @@
+**⚠️ This repository has been superceded by the [plastron](https://github.com/umd-lib/plastron) project.**\
+Further development of the batch loader and other batch operation tools will occur there.
+
+----------------------------------------------------------------------------------------------------------
+
 Utility for batch loading newspaper content into a Fedora 4 repository.
 
 ## Installation
